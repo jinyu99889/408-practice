@@ -61,4 +61,13 @@ psql -U <用户名> -d <数据库名> -f db/schema.sql
 
 ## 本地运行
 
-代码写完后补在这里。依赖版本在开发第一天锁定。
+后端要求 Python 3.12，并使用 uv 管理依赖：
+
+```bash
+cd backend
+uv sync
+uv run pytest
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+健康检查地址：`http://127.0.0.1:8000/api/v1/health`。配置可通过仓库根目录 `.env` 或环境变量覆盖，变量名前缀为 `APP_`（例如 `APP_PORT=9000`）。
