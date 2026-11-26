@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+# 健康检查路由：curl http://127.0.0.1:8000/api/v1/health 可用于探活。
 router = APIRouter()
 
 
