@@ -16,8 +16,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # HTTP 服务监听端口。
     port: int = 8000
+    # PostgreSQL 连接字符串，默认本机 408_practice 库。
     database_url: str = "postgresql+psycopg://localhost/408_practice"
+    # 运行时数据目录：上传文件、媒体插图、密钥，不进版本库。
     data_dir: Path = REPOSITORY_ROOT / "data"
 
 

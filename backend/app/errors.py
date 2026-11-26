@@ -6,6 +6,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.error_codes import ErrorCode, status_for
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,16 +16,17 @@ class AppError(Exception):
 
     def __init__(
         self,
-        code: str,
+        code: ErrorCode,
         message: str,
-        status: int,
         details: Any = None,
     ) -> None:
         """初始化可透传到统一错误响应的业务错误信息。"""
         super().__init__(message)
+        if not isinstance(code, ErrorCode):
+            raise TypeError("AppError.code must be an ErrorCode")
         self.code = code
         self.message = message
-        self.status = status
+        self.status = status_for(code)
         self.details = details
 
 
@@ -33,7 +36,7 @@ def _error_response(
     """构造统一结构的 JSON 错误响应。"""
     return JSONResponse(
         status_code=status,
-        content={"code": code, "message": message, "details": details},
+        content={"code": code.value, "message": message, "details": details},
     )
 
 
@@ -49,7 +52,7 @@ async def http_exception_handler(
     message = exc.detail if isinstance(exc.detail, str) else "HTTP request failed"
     return _error_response(
         exc.status_code,
-        "HTTP_ERROR",
+        ErrorCode.HTTP_ERROR,
         message,
         {"status_code": exc.status_code},
     )
@@ -65,7 +68,7 @@ async def validation_exception_handler(
     ]
     return _error_response(
         422,
-        "VALIDATION_ERROR",
+        ErrorCode.VALIDATION_ERROR,
         "Request validation failed",
         {"errors": errors},
     )
@@ -76,7 +79,7 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     logger.exception("Unhandled application exception", exc_info=exc)
     return _error_response(
         500,
-        "INTERNAL_ERROR",
+        ErrorCode.INTERNAL_ERROR,
         "Internal server error",
         None,
     )

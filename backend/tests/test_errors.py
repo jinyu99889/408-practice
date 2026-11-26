@@ -2,12 +2,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.errors import AppError
+from app.error_codes import ErrorCode
 from app.main import API_PREFIX, create_app
 
 
 def _client_with_route(path: str, handler) -> TestClient:
     """创建挂载临时测试路由且返回错误响应的客户端。"""
-    app: FastAPI = create_app()
+    app: FastAPI = create_app(enable_startup=False)
     app.add_api_route(f"{API_PREFIX}{path}", handler, methods=["GET"])
     return TestClient(app, raise_server_exceptions=False)
 
@@ -49,14 +50,14 @@ def test_app_error_fields_are_returned_unchanged() -> None:
     """验证业务异常的状态码和字段透传到响应。"""
     def fail() -> None:
         """模拟抛出带业务详情的应用异常。"""
-        raise AppError("X", "说明", 409, {"a": 1})
+        raise AppError(ErrorCode.ALREADY_IN_WRONGBOOK, "说明", {"a": 1})
 
     with _client_with_route("/_test/app-error", fail) as client:
         response = client.get("/api/v1/_test/app-error")
 
     assert response.status_code == 409
     assert response.json() == {
-        "code": "X",
+        "code": "ALREADY_IN_WRONGBOOK",
         "message": "说明",
         "details": {"a": 1},
     }
@@ -64,7 +65,7 @@ def test_app_error_fields_are_returned_unchanged() -> None:
 
 def test_openapi_contains_versioned_health_path() -> None:
     """验证 OpenAPI 文档公开带版本前缀的健康检查路由。"""
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(enable_startup=False)) as client:
         response = client.get("/openapi.json")
 
     assert response.status_code == 200
