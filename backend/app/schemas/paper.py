@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PaperSummary(BaseModel):
@@ -18,3 +18,46 @@ class PaperSummary(BaseModel):
     last_exam_at: datetime | None
     # 只统计 submitted 和 auto_submitted 两种考试状态。
     exam_count: int
+
+
+class QuestionOption(BaseModel):
+    """客观题选项的公开结构。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    text: str
+    image: str | None
+
+
+class QuestionPart(BaseModel):
+    """主观题小问的公开结构。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    images: list[str]
+
+
+class QuestionStub(BaseModel):
+    """做题页需要的题面字段，不包含答案、解析或知识点。"""
+
+    id: int
+    seq_no: int
+    qtype: str
+    subject: str
+    score: int
+    stem: str
+    stem_images: list[str]
+    options: list[QuestionOption]
+    parts: list[QuestionPart] | None
+
+
+class PaperDetail(BaseModel):
+    """做题页一次加载的整张已发布试卷。"""
+
+    id: int
+    title: str
+    year: int | None
+    total_score: int
+    questions: list[QuestionStub]
