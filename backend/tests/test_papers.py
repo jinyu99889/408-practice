@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from datetime import datetime
 
@@ -28,7 +29,11 @@ def paper_client() -> Iterator[tuple[TestClient, Engine, list[str]]]:
         )
         connection.exec_driver_sql(
             "CREATE TABLE question (id INTEGER PRIMARY KEY, paper_id INTEGER NOT NULL, "
-            "score INTEGER NOT NULL, status TEXT NOT NULL)"
+            "seq_no INTEGER, qtype TEXT, subject TEXT, score INTEGER NOT NULL, "
+            "stem TEXT, stem_images TEXT NOT NULL DEFAULT '[]', "
+            "options TEXT NOT NULL DEFAULT '[]', parts TEXT, answer_choice TEXT, "
+            "answer_text TEXT, analysis TEXT, knowledge_tags TEXT NOT NULL DEFAULT '[]', "
+            "status TEXT NOT NULL)"
         )
         connection.exec_driver_sql(
             "CREATE TABLE exam_attempt (id INTEGER PRIMARY KEY, paper_id INTEGER NOT NULL, "
@@ -65,6 +70,52 @@ def _insert_paper(
                 "VALUES (:id, :title, :year, :status)"
             ),
             {"id": paper_id, "title": title, "year": year, "status": status},
+        )
+
+
+def _insert_question(
+    engine: Engine,
+    *,
+    question_id: int,
+    paper_id: int,
+    seq_no: int,
+    score: int,
+    status: str,
+    qtype: str = "single",
+    subject: str = "数据结构",
+    stem: str = "题干",
+    stem_images: list[str] | None = None,
+    options: list[dict[str, object]] | None = None,
+    parts: list[dict[str, object]] | None = None,
+) -> None:
+    """写入详情接口所需的题面及不应外泄的答案字段。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO question "
+                "(id, paper_id, seq_no, qtype, subject, score, stem, stem_images, "
+                "options, parts, answer_choice, answer_text, analysis, knowledge_tags, status) "
+                "VALUES (:id, :paper_id, :seq_no, :qtype, :subject, :score, :stem, "
+                ":stem_images, :options, :parts, :answer_choice, :answer_text, "
+                ":analysis, :knowledge_tags, :status)"
+            ),
+            {
+                "id": question_id,
+                "paper_id": paper_id,
+                "seq_no": seq_no,
+                "qtype": qtype,
+                "subject": subject,
+                "score": score,
+                "stem": stem,
+                "stem_images": json.dumps(stem_images or [], ensure_ascii=False),
+                "options": json.dumps(options or [], ensure_ascii=False),
+                "parts": json.dumps(parts, ensure_ascii=False) if parts is not None else None,
+                "answer_choice": '["A"]',
+                "answer_text": "参考答案不应返回",
+                "analysis": "解析不应返回",
+                "knowledge_tags": '["栈"]',
+                "status": status,
+            },
         )
 
 
@@ -181,4 +232,207 @@ def test_paper_summary_fields_keep_contract_order() -> None:
         "last_exam_score",
         "last_exam_at",
         "exam_count",
+    ]
+
+
+def test_get_paper_returns_only_approved_question_stubs_in_sequence_order(
+    paper_client,
+) -> None:
+    """详情只返回已发布卷的已审核题面，并按题号升序排列。"""
+    client, engine, statements = paper_client
+    _insert_paper(engine, 1, "2024 年 408 统考真题", 2024, "published")
+    _insert_paper(engine, 2, "未发布试卷", 2023, "draft")
+    _insert_question(
+        engine,
+        question_id=46,
+        paper_id=1,
+        seq_no=2,
+        score=4,
+        status="approved",
+        stem="第二题",
+        stem_images=["/api/v1/media/1/2-1.png", "/api/v1/media/1/2-2.png"],
+        options=[
+            {"key": "A", "text": "选项 A", "image": None},
+            {"key": "B", "text": "", "image": "/api/v1/media/1/2-B.png"},
+        ],
+    )
+    _insert_question(
+        engine,
+        question_id=45,
+        paper_id=1,
+        seq_no=1,
+        score=2,
+        status="approved",
+        qtype="short",
+        stem="第一题",
+        parts=[
+            {"text": "第一问", "images": ["/api/v1/media/1/1-part-1.png"]},
+            {"text": "第二问", "images": []},
+        ],
+    )
+    _insert_question(
+        engine,
+        question_id=47,
+        paper_id=1,
+        seq_no=3,
+        score=99,
+        status="draft",
+        stem="草稿题不应返回",
+    )
+
+    statements.clear()
+    response = client.get("/api/v1/papers/1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 1,
+        "title": "2024 年 408 统考真题",
+        "year": 2024,
+        "total_score": 6,
+        "questions": [
+            {
+                "id": 45,
+                "seq_no": 1,
+                "qtype": "short",
+                "subject": "数据结构",
+                "score": 2,
+                "stem": "第一题",
+                "stem_images": [],
+                "options": [],
+                "parts": [
+                    {"text": "第一问", "images": ["/api/v1/media/1/1-part-1.png"]},
+                    {"text": "第二问", "images": []},
+                ],
+            },
+            {
+                "id": 46,
+                "seq_no": 2,
+                "qtype": "single",
+                "subject": "数据结构",
+                "score": 4,
+                "stem": "第二题",
+                "stem_images": ["/api/v1/media/1/2-1.png", "/api/v1/media/1/2-2.png"],
+                "options": [
+                    {"key": "A", "text": "选项 A", "image": None},
+                    {"key": "B", "text": "", "image": "/api/v1/media/1/2-B.png"},
+                ],
+                "parts": None,
+            },
+        ],
+    }
+    assert len(
+        [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    ) == 1
+    body = response.json()
+    assert list(body) == ["id", "title", "year", "total_score", "questions"]
+    assert list(body["questions"][0]) == [
+        "id",
+        "seq_no",
+        "qtype",
+        "subject",
+        "score",
+        "stem",
+        "stem_images",
+        "options",
+        "parts",
+    ]
+    assert list(body["questions"][0]["parts"][0]) == ["text", "images"]
+    media_urls = [
+        *body["questions"][0]["parts"][0]["images"],
+        *body["questions"][1]["stem_images"],
+        body["questions"][1]["options"][1]["image"],
+    ]
+    assert all(url.startswith("/api/v1/media/") for url in media_urls)
+    assert client.get("/api/v1/papers").json()[0]["total_score"] == body["total_score"]
+
+
+@pytest.mark.parametrize("paper_id", [2, 404])
+def test_get_paper_returns_business_not_found_for_hidden_or_missing_papers(
+    paper_client, paper_id: int
+) -> None:
+    """草稿卷与不存在的卷都统一为业务 404。"""
+    client, engine, _statements = paper_client
+    _insert_paper(engine, 2, "未发布试卷", 2023, "draft")
+
+    response = client.get(f"/api/v1/papers/{paper_id}")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "code": "PAPER_NOT_FOUND",
+        "message": "试卷不存在",
+        "details": {},
+    }
+
+
+def test_get_paper_returns_empty_questions_for_published_paper_without_approved_questions(
+    paper_client,
+) -> None:
+    """已发布但没有已审核题时仍返回试卷基础信息和空题面。"""
+    client, engine, statements = paper_client
+    _insert_paper(engine, 3, "空题面试卷", 2022, "published")
+    statements.clear()
+
+    response = client.get("/api/v1/papers/3")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 3,
+        "title": "空题面试卷",
+        "year": 2022,
+        "total_score": 0,
+        "questions": [],
+    }
+    assert len(
+        [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+    ) == 1
+
+
+def test_get_paper_response_models_keep_contract_field_order() -> None:
+    """锁定详情响应、题面和选项对象的接口字段顺序。"""
+    from app.schemas.paper import PaperDetail, QuestionOption, QuestionPart, QuestionStub
+
+    assert list(PaperDetail.model_fields) == [
+        "id",
+        "title",
+        "year",
+        "total_score",
+        "questions",
+    ]
+    assert list(QuestionStub.model_fields) == [
+        "id",
+        "seq_no",
+        "qtype",
+        "subject",
+        "score",
+        "stem",
+        "stem_images",
+        "options",
+        "parts",
+    ]
+    assert list(QuestionOption.model_fields) == ["key", "text", "image"]
+    assert list(QuestionPart.model_fields) == ["text", "images"]
+
+    with pytest.raises(ValueError):
+        QuestionOption.model_validate(
+            {"key": "A", "text": "选项", "image": None, "answer": "不应出现在题面"}
+        )
+    with pytest.raises(ValueError):
+        QuestionPart.model_validate(
+            {"text": "小问", "images": [], "answer": "不应出现在题面"}
+        )
+
+
+def test_get_paper_rejects_ids_outside_positive_bigint_range(paper_client) -> None:
+    """越界 paper_id 在查询数据库前作为参数错误返回。"""
+    client, _engine, statements = paper_client
+    statements.clear()
+
+    response = client.get("/api/v1/papers/9223372036854775808")
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert not [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith("SELECT")
     ]

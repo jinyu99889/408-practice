@@ -1,7 +1,12 @@
+import json
+from typing import Any
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.schemas.paper import PaperSummary
+from app.errors import AppError
+from app.error_codes import ErrorCode
+from app.schemas.paper import PaperDetail, PaperSummary, QuestionStub
 
 
 # 列表页只需要固定数量的最新试卷；所有统计在一条 SQL 中完成，避免逐卷查询。
@@ -42,3 +47,62 @@ def paper_summaries(db: Session) -> list[PaperSummary]:
     rows = db.execute(PAPER_SUMMARIES_SQL).mappings()
     # 显式按响应模型转换，保证字段名、类型和对外顺序符合接口契约。
     return [PaperSummary.model_validate(row) for row in rows]
+
+
+PAPER_DETAIL_SQL = text(
+    """
+    SELECT p.id, p.title, p.year,
+           COALESCE(SUM(q.score) OVER (), 0) AS total_score,
+           q.id AS question_id, q.seq_no, q.qtype, q.subject, q.score,
+           q.stem, q.stem_images, q.options, q.parts
+    FROM paper p
+    LEFT JOIN question q
+      ON q.paper_id = p.id AND q.status = 'approved'
+    WHERE p.id = :paper_id AND p.status = 'published'
+    ORDER BY q.seq_no ASC
+    """
+)
+
+
+def _json_value(value: Any, default: Any) -> Any:
+    """把 SQLite 测试返回的 JSON 文本还原为与 PostgreSQL JSONB 一致的值。"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def paper_detail(db: Session, paper_id: int) -> PaperDetail:
+    """用一次投影查询拼出一张已发布试卷的题面。"""
+    rows = list(db.execute(PAPER_DETAIL_SQL, {"paper_id": paper_id}).mappings())
+    if not rows:
+        raise AppError(ErrorCode.PAPER_NOT_FOUND, "试卷不存在", {})
+
+    first = rows[0]
+    questions: list[QuestionStub] = []
+    for row in rows:
+        if row["question_id"] is None:
+            continue
+        questions.append(
+            QuestionStub(
+                id=row["question_id"],
+                seq_no=row["seq_no"],
+                qtype=row["qtype"],
+                subject=row["subject"],
+                score=row["score"],
+                stem=row["stem"],
+                stem_images=_json_value(row["stem_images"], []),
+                options=_json_value(row["options"], []),
+                parts=_json_value(row["parts"], None),
+            )
+        )
+
+    # TODO: 45 题 PostgreSQL 无缓存中位数为 6.48ms，真实卷数据到位后再评估缓存。
+    return PaperDetail(
+        id=first["id"],
+        title=first["title"],
+        year=first["year"],
+        total_score=first["total_score"],
+        questions=questions,
+    )
