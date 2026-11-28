@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.health import router as health_router
+from app.api.media import router as media_router
 from app.api.papers import router as papers_router
 from app.errors import (
     AppError,
@@ -25,6 +26,7 @@ def create_app(settings=None, db_engine=None, enable_startup: bool = True) -> Fa
     )
     configure_database(application, settings=settings, db_engine=db_engine)
     application.include_router(health_router, prefix=API_PREFIX)
+    application.include_router(media_router, prefix=API_PREFIX)
     application.include_router(papers_router, prefix=API_PREFIX)
     application.add_exception_handler(AppError, app_error_handler)
     application.add_exception_handler(
