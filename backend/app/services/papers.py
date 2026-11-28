@@ -1,12 +1,10 @@
-import json
-from typing import Any
-
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.errors import AppError
 from app.error_codes import ErrorCode
 from app.schemas.paper import PaperDetail, PaperSummary, QuestionStub
+from app.services.json_fields import decode_json
 
 
 # 列表页只需要固定数量的最新试卷；所有统计在一条 SQL 中完成，避免逐卷查询。
@@ -64,15 +62,6 @@ PAPER_DETAIL_SQL = text(
 )
 
 
-def _json_value(value: Any, default: Any) -> Any:
-    """把 SQLite 测试返回的 JSON 文本还原为与 PostgreSQL JSONB 一致的值。"""
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return json.loads(value)
-    return value
-
-
 def paper_detail(db: Session, paper_id: int) -> PaperDetail:
     """用一次投影查询拼出一张已发布试卷的题面。"""
     rows = list(db.execute(PAPER_DETAIL_SQL, {"paper_id": paper_id}).mappings())
@@ -92,9 +81,9 @@ def paper_detail(db: Session, paper_id: int) -> PaperDetail:
                 subject=row["subject"],
                 score=row["score"],
                 stem=row["stem"],
-                stem_images=_json_value(row["stem_images"], []),
-                options=_json_value(row["options"], []),
-                parts=_json_value(row["parts"], None),
+                stem_images=decode_json(row["stem_images"], []),
+                options=decode_json(row["options"], []),
+                parts=decode_json(row["parts"], None),
             )
         )
 
